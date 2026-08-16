@@ -161,13 +161,19 @@ async fn run_order(
         }
     }
 
-    let status = order.poll_ready(&RetryPolicy::default()).await?;
+    // Production Let's Encrypt validates from multiple network perspectives
+    // and can take well over a minute; the default policy gives up too early.
+    let patient = RetryPolicy::default()
+        .initial_delay(std::time::Duration::from_secs(1))
+        .backoff(1.5)
+        .timeout(std::time::Duration::from_secs(300));
+    let status = order.poll_ready(&patient).await?;
     if status != OrderStatus::Ready {
         bail!("order failed validation, status: {status:?}");
     }
     let key_pem = order.finalize().await.context("finalize failed")?;
     let chain_pem = order
-        .poll_certificate(&RetryPolicy::default())
+        .poll_certificate(&patient)
         .await
         .context("certificate download failed")?;
     Ok((key_pem, chain_pem))
