@@ -1,0 +1,32 @@
+# dnsvcert — DNSVault ACME DNS-01 client
+# Copy to /etc/dnsvcert/dnsvcert.yml and adjust.
+
+acme:
+  # Use https://acme-staging-v02.api.letsencrypt.org/directory while testing.
+  directory: https://acme-v02.api.letsencrypt.org/directory
+  email: admin@example.com
+
+# Where ACME account credentials are stored.
+state_dir: /var/lib/dnsvcert
+
+dns:
+  # DNSVault master that accepts the TSIG-signed updates for the challenge zone.
+  server: 203.0.113.10
+  # The delegated challenge zone (see README for the one-time zone setup).
+  challenge_zone: acme.example.com
+  tsig_key: dnsvcert-key
+  # Base64 secret from tsig-keygen. Alternatively set DNSVCERT_TSIG_SECRET
+  # in the environment and omit this line.
+  tsig_secret: "CHANGE_ME"
+  tsig_algorithm: hmac-sha256
+  ttl: 60
+  # Wait after writing TXT records, covers NOTIFY lag to secondaries.
+  propagation_wait_secs: 10
+
+# Re-issue when fewer than this many days remain (used by `dnsvcert renew`).
+renew_before_days: 30
+
+certificates:
+  - domains: ["app.example.com", "*.app.example.com"]
+    output_dir: /etc/ssl/app
+    reload_hook: "systemctl reload nginx"
