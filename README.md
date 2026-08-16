@@ -76,3 +76,10 @@ certbot certonly --manual --preferred-challenges dns \
 ```
 cargo build --release   # target/release/dnsvcert, single static-ish binary
 ```
+
+## License
+
+Source-available, all rights reserved. You may read the code and run the
+release binaries for your own certificate automation. Copying, forking,
+redistribution, and offering this software as part of any service require
+written permission from DNSVault — see [LICENSE](LICENSE).

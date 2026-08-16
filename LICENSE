@@ -1,0 +1,39 @@
+DNSVault Source-Available License v1.0
+
+Copyright (c) 2026 DNSVault. All rights reserved.
+
+Permission is granted, free of charge, to any person, to:
+
+  1. View and read the source code in this repository.
+
+  2. Download and run unmodified release binaries of dnsvcert, solely to
+     obtain and renew TLS certificates for domains that person or their
+     organization controls.
+
+All other rights are reserved. Without prior written permission from
+DNSVault, you may NOT:
+
+  a. copy, modify, translate, or create derivative works of this software
+     or its source code, in whole or in part;
+
+  b. fork, redistribute, sublicense, sell, rent, or otherwise make this
+     software or any modified version of it available to others;
+
+  c. use this software, its source code, or any part of it to provide a
+     product or service to third parties — including, without limitation,
+     any certificate-automation service, ACME challenge-hosting service,
+     or DNS hosting service that competes with DNSVault;
+
+  d. remove or alter this notice.
+
+Contributions: by submitting a contribution to this repository you assign
+all rights in that contribution to DNSVault.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+DNSVAULT BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For licensing beyond these terms, contact DNSVault.
