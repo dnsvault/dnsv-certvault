@@ -16,17 +16,23 @@ pub struct ChallengeDns {
     pub zone: String,
     ttl: u32,
     pub propagation_wait_secs: u64,
+    signed: bool,
 }
 
 impl ChallengeDns {
     pub fn new(cfg: &DnsConfig) -> Result<Self> {
-        let secret = cfg
-            .tsig_secret
-            .as_deref()
-            .ok_or_else(|| anyhow!("missing TSIG secret"))?;
-        let key = base64::engine::general_purpose::STANDARD
-            .decode(secret.trim())
-            .context("dns.tsig_secret is not valid base64")?;
+        // Queries go out unsigned either way; without a secret we build the
+        // updater with a dummy key and refuse writes, so read-only commands
+        // (doctor's CNAME checks) work before any credential exists.
+        let (key, signed) = match cfg.tsig_secret.as_deref() {
+            Some(secret) => (
+                base64::engine::general_purpose::STANDARD
+                    .decode(secret.trim())
+                    .context("dns.tsig_secret is not valid base64")?,
+                true,
+            ),
+            None => (vec![0u8; 32], false),
+        };
         let updater = DnsUpdater::new_rfc2136_tsig(
             cfg.server_addr().as_str(),
             &cfg.tsig_key,
@@ -39,10 +45,23 @@ impl ChallengeDns {
             zone: cfg.challenge_zone.clone(),
             ttl: cfg.ttl,
             propagation_wait_secs: cfg.propagation_wait_secs,
+            signed,
         })
     }
 
+    pub fn can_write(&self) -> bool {
+        self.signed
+    }
+
+    fn require_secret(&self) -> Result<()> {
+        if !self.signed {
+            bail!("no TSIG secret configured — set dns.tsig_secret or DNSVCERT_TSIG_SECRET");
+        }
+        Ok(())
+    }
+
     pub async fn add_txt(&self, name: &str, value: &str) -> Result<()> {
+        self.require_secret()?;
         self.updater
             .add_to_rrset(
                 name,
@@ -57,6 +76,7 @@ impl ChallengeDns {
 
     /// Delete the whole TXT RRSet at `name`.
     pub async fn clear_txt(&self, name: &str) -> Result<()> {
+        self.require_secret()?;
         self.updater
             .set_rrset(name, DnsRecordType::TXT, 0, vec![], self.zone.as_str())
             .await

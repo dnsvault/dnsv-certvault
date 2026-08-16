@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -81,9 +81,11 @@ impl Config {
         if let Ok(secret) = std::env::var("DNSVCERT_TSIG_SECRET") {
             cfg.dns.tsig_secret = Some(secret);
         }
-        if cfg.dns.tsig_secret.as_deref().unwrap_or("").is_empty() {
-            bail!("no TSIG secret: set dns.tsig_secret in {path} or DNSVCERT_TSIG_SECRET");
+        if matches!(cfg.dns.tsig_secret.as_deref(), Some("") | Some("CHANGE_ME")) {
+            cfg.dns.tsig_secret = None;
         }
+        // A missing secret is allowed here: read-only commands (doctor's CNAME
+        // checks) work unsigned. Writes fail with a pointed error instead.
         Ok(cfg)
     }
 }

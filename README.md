@@ -48,14 +48,24 @@ the whole server-side requirement.
 
    One CNAME covers both `app.example.com` and `*.app.example.com`.
 
+## Install
+
+Grab a prebuilt binary from [Releases](https://github.com/dnsvault/dnsv-certvault/releases)
+(Linux x86_64/ARM64, macOS, Windows, FreeBSD), extract, and put `dnsvcert`
+on your PATH. No runtime, no dependencies.
+
 ## Client usage
 
 ```
-cp dnsvcert.example.yml /etc/dnsvcert/dnsvcert.yml   # then edit
+dnsvcert init --domain app.example.com --domain '*.app.example.com' \
+  --email ops@example.com --challenge-zone acme.example.com   # writes starter config
 dnsvcert doctor    # verify CNAME delegation + TSIG write access
 dnsvcert issue     # issue everything in the config
 dnsvcert renew     # cron/systemd-timer friendly, renews when < 30 days left
 ```
+
+`doctor`'s CNAME checks run even before you have a TSIG secret, and every
+failure prints the exact record to add.
 
 The internal machine only needs outbound DNS to the DNSVault master and
 outbound HTTPS to the CA. Nothing inbound.
