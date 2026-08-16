@@ -86,7 +86,19 @@ async fn run_certs(cfg: &Config, renew_only: bool) -> Result<()> {
             continue;
         }
         if let Some(hook) = &cert.reload_hook {
-            match std::process::Command::new("sh").arg("-c").arg(hook).status() {
+            #[cfg(unix)]
+            let mut cmd = {
+                let mut c = std::process::Command::new("sh");
+                c.arg("-c").arg(hook);
+                c
+            };
+            #[cfg(windows)]
+            let mut cmd = {
+                let mut c = std::process::Command::new("cmd");
+                c.arg("/C").arg(hook);
+                c
+            };
+            match cmd.status() {
                 Ok(s) if s.success() => println!("reload hook ok: {hook}"),
                 Ok(s) => {
                     eprintln!("reload hook exited {s}: {hook}");

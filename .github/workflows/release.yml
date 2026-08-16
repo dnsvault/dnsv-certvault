@@ -1,0 +1,79 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.best-effort == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+            best-effort: true
+          # No FreeBSD runners on GitHub; cross-built, aws-lc-sys is the risky bit.
+          - target: x86_64-unknown-freebsd
+            os: ubuntu-latest
+            cross: true
+            best-effort: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # aws-lc-rs assembles with NASM on Windows MSVC
+      - uses: ilammy/setup-nasm@v1
+        if: runner.os == 'Windows'
+
+      - name: musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: add target
+        if: matrix.cross != true
+        run: rustup target add ${{ matrix.target }}
+
+      - name: install cross
+        if: matrix.cross == true
+        run: cargo install cross --locked
+
+      - name: build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: package
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/$TARGET/release/dnsvcert.exe" dist/
+            cd dist && 7z a "dnsvcert-$REF_NAME-$TARGET.zip" dnsvcert.exe && rm dnsvcert.exe
+          else
+            cp "target/$TARGET/release/dnsvcert" dist/
+            cd dist && tar czf "dnsvcert-$REF_NAME-$TARGET.tar.gz" dnsvcert && rm dnsvcert
+          fi
+          cd "$GITHUB_WORKSPACE/dist" && sha256sum dnsvcert-* > "dnsvcert-$REF_NAME-$TARGET.sha256"
+
+      - name: upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/dnsvcert-*

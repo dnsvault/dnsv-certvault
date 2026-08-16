@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -182,7 +181,13 @@ async fn run_order(
 fn write_file(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, contents).with_context(|| format!("cannot write {}", tmp.display()))?;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    let _ = mode; // Windows: NTFS ACLs inherit from the directory; no chmod analogue
     std::fs::rename(&tmp, path).with_context(|| format!("cannot move into {}", path.display()))?;
     Ok(())
 }
