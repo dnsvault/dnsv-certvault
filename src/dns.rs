@@ -34,7 +34,7 @@ impl ChallengeDns {
             None => (vec![0u8; 32], false),
         };
         let updater = DnsUpdater::new_rfc2136_tsig(
-            cfg.server_addr().as_str(),
+            resolve_server(&cfg.server_addr())?.as_str(),
             &cfg.tsig_key,
             key,
             parse_algorithm(&cfg.tsig_algorithm)?,
@@ -125,6 +125,23 @@ impl ChallengeDns {
         }
         bail!("TXT {name} not visible on master after update — check the challenge zone setup");
     }
+}
+
+/// dns-update's address parser only takes IPs; people configure hostnames.
+/// Resolve "proto://host:port" to "proto://ip:port" when host isn't an IP.
+fn resolve_server(addr: &str) -> Result<String> {
+    let (proto, rest) = addr.split_once("://").unwrap_or(("tcp", addr));
+    let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "53"));
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(format!("{proto}://{host}:{port}"));
+    }
+    use std::net::ToSocketAddrs;
+    let sock = format!("{host}:{port}")
+        .to_socket_addrs()
+        .with_context(|| format!("cannot resolve dns.server hostname '{host}'"))?
+        .next()
+        .ok_or_else(|| anyhow!("dns.server '{host}' resolved to no addresses"))?;
+    Ok(format!("{proto}://{}:{}", sock.ip(), sock.port()))
 }
 
 fn parse_algorithm(s: &str) -> Result<TsigAlgorithm> {
