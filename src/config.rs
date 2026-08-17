@@ -131,6 +131,7 @@ pub fn render_template(
     output_dir: &str,
     state_dir: &str,
     reload_hook: Option<&str>,
+    resolver: Option<&str>,
 ) -> String {
     let domains_line = if domains.is_empty() {
         r#""app.example.com", "*.app.example.com""#.to_string()
@@ -144,6 +145,12 @@ pub fn render_template(
     let hook_line = match reload_hook {
         Some(h) if !h.is_empty() => format!("    reload_hook: \"{h}\"\n"),
         _ => "    # reload_hook: \"systemctl reload nginx\"\n".to_string(),
+    };
+    let resolver_block = match resolver {
+        Some(r) => format!(
+            "  # Verification queries go here (what Let's Encrypt sees); query signing is off.\n  resolver: {r}"
+        ),
+        None => "  # Verification queries are TSIG-signed to the server above so multi-view\n  # servers route them like the updates. To verify via a resolver instead:\n  # resolver: 8.8.8.8\n  # sign_queries: false".to_string(),
     };
     format!(
         r#"acme:
@@ -159,10 +166,7 @@ dns:
   tsig_key: {key}
   # Base64 secret; alternatively set the DNSVCERT_TSIG_SECRET environment variable.
   tsig_secret: "{secret}"
-  # Multi-view servers: verification queries are TSIG-signed by default so
-  # they route like the updates. Uncomment to send them elsewhere instead:
-  # resolver: 8.8.8.8
-  # sign_queries: false
+{resolver_block}
 
 renew_before_days: 30
 

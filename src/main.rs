@@ -109,6 +109,7 @@ fn run_init(config_path: &str, args: &InitArgs) -> Result<()> {
         &or(&args.output_dir, "/etc/ssl/dnsvcert"),
         "/var/lib/dnsvcert",
         None,
+        None,
     );
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)

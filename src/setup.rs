@@ -74,6 +74,40 @@ pub async fn run(config_path: &str) -> Result<()> {
         }
     }
 
+    println!();
+    println!("How should dnsvcert verify its DNS records?");
+    println!("  1. Ask the DNSVault server directly (signed) — works everywhere,");
+    println!("     including locked-down networks where DNS must go through DNSVault");
+    println!("  2. Ask a resolver — checks exactly what Let's Encrypt will see");
+    let resolver = loop {
+        match ask("Choose 1 or 2", Some("1")).as_str() {
+            "1" => break None,
+            "2" => {
+                let r = ask("Resolver address", Some("8.8.8.8"));
+                if confirm(
+                    "Is your DNS split-horizon / multi-view (internal answers differ from public)?",
+                    false,
+                ) {
+                    let internal_ip = r.starts_with("10.")
+                        || r.starts_with("192.168.")
+                        || r.starts_with("172.");
+                    if internal_ip {
+                        println!("  NOTE: {r} looks like an internal resolver — on a split-horizon");
+                        println!("  network it may answer from the internal view, which is not what");
+                        println!("  Let's Encrypt sees. A public resolver (8.8.8.8) or option 1 is safer.");
+                        if !confirm(&format!("Keep {r} anyway?"), false) {
+                            continue;
+                        }
+                    }
+                    println!("  tip: keep the challenge zone's TTLs and SOA minimum low (60s)");
+                    println!("  so resolver caches don't stall verification.");
+                }
+                break Some(r);
+            }
+            _ => println!("  1 or 2, please"),
+        }
+    };
+
     let first_base = domains
         .first()
         .map(|d| d.strip_prefix("*.").unwrap_or(d).to_string())
@@ -95,6 +129,7 @@ pub async fn run(config_path: &str) -> Result<()> {
         &output_dir,
         &default_state_dir(),
         Some(hook.as_str()).filter(|h| !h.is_empty()),
+        resolver.as_deref(),
     );
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
