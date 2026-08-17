@@ -88,3 +88,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/dnsvcert-*
+          generate_release_notes: true
