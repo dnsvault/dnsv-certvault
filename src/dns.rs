@@ -187,7 +187,13 @@ impl ChallengeDns {
     /// BIND applies updates synchronously; the retries cover slow paths only.
     pub async fn confirm_txt(&self, name: &str, value: &str) -> Result<()> {
         for _ in 0..10 {
-            if self.txt_values(name).await?.iter().any(|v| v == value) {
+            let present = if self.signed {
+                // Signed prerequisite: follows the key's view on multi-view servers.
+                self.master.txt_exists(&self.zone, name, value).await?
+            } else {
+                self.txt_values(name).await?.iter().any(|v| v == value)
+            };
+            if present {
                 return Ok(());
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;

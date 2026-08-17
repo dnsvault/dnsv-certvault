@@ -42,16 +42,7 @@ impl Querier {
     }
 
 
-    /// TCP query; returns the answer RDATA for records matching `rtype` at `name`.
-    pub async fn query(&self, name: &str, rtype: RecordType) -> Result<Vec<RData>> {
-        let fqdn = if name.ends_with('.') {
-            name.to_string()
-        } else {
-            format!("{name}.")
-        };
-        let owner =
-            Name::from_str_relaxed(&fqdn).map_err(|e| anyhow!("bad name {name}: {e}"))?;
-
+    async fn connect(&self) -> Result<Client<TokioRuntimeProvider>> {
         let (stream_future, sender) =
             TcpClientStream::new(self.addr, None, None, TokioRuntimeProvider::new());
         let stream = stream_future
@@ -61,9 +52,19 @@ impl Querier {
         if let Some(signer) = &self.signer {
             multiplexer = multiplexer.with_signer(signer.clone());
         }
-        let (mut client, bg): (Client<TokioRuntimeProvider>, _) =
-            Client::from_sender(multiplexer);
+        let (client, bg): (Client<TokioRuntimeProvider>, _) = Client::from_sender(multiplexer);
         tokio::spawn(bg);
+        Ok(client)
+    }
+
+    /// TCP query; returns the answer RDATA for records matching `rtype` at `name`.
+    /// NOTE: plain queries are never TSIG-signed (hickory signs only
+    /// UPDATE/NOTIFY/AXFR), so on a multi-view server this is routed by
+    /// source address. Use `txt_exists` when the view must follow the key.
+    pub async fn query(&self, name: &str, rtype: RecordType) -> Result<Vec<RData>> {
+        let owner = Name::from_str_relaxed(fqdn(name).as_str())
+            .map_err(|e| anyhow!("bad name {name}: {e}"))?;
+        let mut client = self.connect().await?;
 
         let response = client
             .query(owner.clone(), DNSClass::IN, rtype)
@@ -80,6 +81,73 @@ impl Querier {
             .filter(|r| r.record_type() == rtype && r.name == owner)
             .map(|r| r.data.clone())
             .collect())
+    }
+}
+
+impl Querier {
+    /// Ask the server whether `value` exists in the TXT RRset at `name`,
+    /// using an RFC 2136 prerequisite-only UPDATE (empty update section, so
+    /// nothing is written).
+    ///
+    /// Why not a plain query: hickory signs UPDATE/NOTIFY/AXFR but never
+    /// plain queries (`TSigner::should_sign_message`), and a multi-view
+    /// server routes UNSIGNED queries by source address — from inside the
+    /// network that is the wrong view. An UPDATE is signed by definition, so
+    /// this read lands in the same view as the writes.
+    ///
+    /// NOERROR = present, NXRRSET = absent.
+    pub async fn txt_exists(&self, zone: &str, name: &str, value: &str) -> Result<bool> {
+        use hickory_proto::op::update_message::UpdateMessage;
+        use hickory_proto::op::{DnsRequest, DnsRequestOptions, Message, OpCode, Query};
+        use hickory_proto::rr::rdata::TXT;
+        use hickory_proto::rr::{DNSClass, RData, Record, RecordType};
+
+        if self.signer.is_none() {
+            bail!("prerequisite check needs a TSIG key");
+        }
+        let zone_name = Name::from_str_relaxed(fqdn(zone).as_str())
+            .map_err(|e| anyhow!("bad zone {zone}: {e}"))?;
+        let owner = Name::from_str_relaxed(fqdn(name).as_str())
+            .map_err(|e| anyhow!("bad name {name}: {e}"))?;
+
+        let mut zq = Query::new();
+        zq.set_name(zone_name)
+            .set_query_class(DNSClass::IN)
+            .set_query_type(RecordType::SOA);
+
+        let mut message = Message::query();
+        message.metadata.op_code = OpCode::Update;
+        message.metadata.recursion_desired = false;
+        message.add_zone(zq);
+        // "RRset exists (value dependent)": class = zone class, ttl 0, rdata present.
+        let mut prereq = Record::from_rdata(owner, 0, RData::TXT(TXT::new(vec![value.to_string()])));
+        prereq.dns_class = DNSClass::IN;
+        message.add_pre_requisite(prereq);
+
+        let client = self.connect().await?;
+        let response = {
+            use futures_util::StreamExt;
+            use hickory_net::xfer::DnsHandle;
+            let mut stream = client.send(DnsRequest::new(message, DnsRequestOptions::default()));
+            stream
+                .next()
+                .await
+                .ok_or_else(|| anyhow!("no response from {}", self.addr))?
+                .map_err(|e| anyhow!("prerequisite check to {} failed: {e}", self.addr))?
+        };
+        match response.response_code {
+            ResponseCode::NoError => Ok(true),
+            ResponseCode::NXRRSet | ResponseCode::NXDomain => Ok(false),
+            other => bail!("server {} answered {} to the prerequisite check", self.addr, other),
+        }
+    }
+}
+
+fn fqdn(name: &str) -> String {
+    if name.ends_with('.') {
+        name.to_string()
+    } else {
+        format!("{name}.")
     }
 }
 
