@@ -117,6 +117,7 @@ async fn run_order(
     dns: &ChallengeDns,
     txt_names: &mut Vec<String>,
 ) -> Result<(String, String)> {
+    let mut pending: Vec<(String, String)> = Vec::new();
     // Pass 1: write every TXT record and confirm the master serves them.
     {
         let mut authorizations = order.authorizations();
@@ -136,6 +137,7 @@ async fn run_order(
             txt_names.push(name.clone());
             dns.confirm_txt(&name, &value).await?;
             println!("TXT {name} in place");
+            pending.push((name, value));
         }
     }
 
@@ -143,6 +145,23 @@ async fn run_order(
     if !txt_names.is_empty() && dns.propagation_wait_secs > 0 {
         println!("waiting {}s for propagation", dns.propagation_wait_secs);
         tokio::time::sleep(std::time::Duration::from_secs(dns.propagation_wait_secs)).await;
+    }
+
+    // With a resolver configured, give it a chance to show the record too.
+    // Advisory only: the CA resolves from its own servers, and a resolver that
+    // cached "no such record" before the write will lag by its negative TTL.
+    for (name, value) in &pending {
+        if !dns
+            .await_public_txt(name, value, dns.propagation_wait_secs.max(60))
+            .await
+        {
+            println!(
+                "note: {name} is not visible via your configured resolver yet \
+                 (negative caching); proceeding — the CA queries the authoritative \
+                 servers itself. Lower the challenge zone's SOA minimum (60s) if this \
+                 keeps happening."
+            );
+        }
     }
 
     // Pass 2: tell the CA every challenge is ready.

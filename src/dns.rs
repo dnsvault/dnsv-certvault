@@ -13,7 +13,11 @@ pub fn challenge_txt_name(identifier: &str, zone: &str) -> String {
 
 pub struct ChallengeDns {
     updater: DnsUpdater,
-    querier: crate::query::Querier,
+    /// Always the update server: authoritative truth that a write landed.
+    master: crate::query::Querier,
+    /// What the world sees — the resolver when configured, else the master.
+    verify: crate::query::Querier,
+    verify_is_resolver: bool,
     pub zone: String,
     ttl: u32,
     pub propagation_wait_secs: u64,
@@ -47,21 +51,41 @@ impl ChallengeDns {
         // multi-view servers route signed queries like the signed updates.
         // A custom resolver flips the signing default off (a public resolver
         // doesn't know the key).
-        let query_sock = match &cfg.resolver {
-            Some(r) => resolve_addr(&normalize_addr(r)),
-            None => Ok(server_sock),
-        }?;
-        let sign_queries = cfg.sign_queries.unwrap_or(cfg.resolver.is_none());
-        let query_key = if sign_queries && signed {
-            Some((cfg.tsig_key.as_str(), key, cfg.tsig_algorithm.as_str()))
+        let master_key = if signed {
+            Some((cfg.tsig_key.as_str(), key.clone(), cfg.tsig_algorithm.as_str()))
         } else {
             None
         };
-        let querier = crate::query::Querier::new(query_sock, query_key)?;
+        let master = crate::query::Querier::new(server_sock, master_key)?;
+
+        let verify_is_resolver = cfg.resolver.is_some();
+        let verify = match &cfg.resolver {
+            Some(r) => {
+                let sock = resolve_addr(&normalize_addr(r))?;
+                let sign = cfg.sign_queries.unwrap_or(false);
+                let k = if sign && signed {
+                    Some((cfg.tsig_key.as_str(), key, cfg.tsig_algorithm.as_str()))
+                } else {
+                    None
+                };
+                crate::query::Querier::new(sock, k)?
+            }
+            None => {
+                let sign = cfg.sign_queries.unwrap_or(true);
+                let k = if sign && signed {
+                    Some((cfg.tsig_key.as_str(), key, cfg.tsig_algorithm.as_str()))
+                } else {
+                    None
+                };
+                crate::query::Querier::new(server_sock, k)?
+            }
+        };
 
         Ok(Self {
             updater,
-            querier,
+            master,
+            verify,
+            verify_is_resolver,
             zone: cfg.challenge_zone.clone(),
             ttl: cfg.ttl,
             propagation_wait_secs: cfg.propagation_wait_secs,
@@ -103,11 +127,18 @@ impl ChallengeDns {
             .map_err(|e| anyhow!("TSIG update failed clearing TXT {name}: {e}"))
     }
 
-    /// Query the verification path for the TXT values at `name`.
+    /// TXT values as the update server itself answers them.
     pub async fn txt_values(&self, name: &str) -> Result<Vec<String>> {
+        self.txt_values_via(&self.master, name).await
+    }
+
+    async fn txt_values_via(
+        &self,
+        q: &crate::query::Querier,
+        name: &str,
+    ) -> Result<Vec<String>> {
         use hickory_proto::rr::{RData, RecordType};
-        let records = self
-            .querier
+        let records = q
             .query(name, RecordType::TXT)
             .await
             .map_err(|e| anyhow!("TXT query for {name} failed: {e}"))?;
@@ -131,7 +162,7 @@ impl ChallengeDns {
     pub async fn cname_target(&self, name: &str) -> Result<Option<String>> {
         use hickory_proto::rr::{RData, RecordType};
         let records = self
-            .querier
+            .verify
             .query(name, RecordType::CNAME)
             .await
             .map_err(|e| anyhow!("CNAME query for {name} failed: {e}"))?;
@@ -152,8 +183,8 @@ impl ChallengeDns {
         result
     }
 
-    /// Confirm the master serves `value` in TXT at `name` (update is applied
-    /// synchronously by BIND; a few retries cover slow paths).
+    /// Confirm the update server itself serves `value` — proof the write landed.
+    /// BIND applies updates synchronously; the retries cover slow paths only.
     pub async fn confirm_txt(&self, name: &str, value: &str) -> Result<()> {
         for _ in 0..10 {
             if self.txt_values(name).await?.iter().any(|v| v == value) {
@@ -161,7 +192,34 @@ impl ChallengeDns {
             }
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
-        bail!("TXT {name} not visible on master after update — check the challenge zone setup");
+        bail!(
+            "TXT {name} was accepted but the update server does not serve it — \
+             check that this server is authoritative for {}",
+            self.zone
+        );
+    }
+
+    /// Poll the configured resolver until it sees `value`. Advisory: Let's
+    /// Encrypt resolves from its own servers, so a resolver that hasn't caught
+    /// up does not mean validation will fail. Returns false on timeout.
+    /// Only meaningful when a separate resolver is configured.
+    pub async fn await_public_txt(&self, name: &str, value: &str, budget_secs: u64) -> bool {
+        if !self.verify_is_resolver {
+            return true;
+        }
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(budget_secs.max(30));
+        loop {
+            if let Ok(vals) = self.txt_values_via(&self.verify, name).await {
+                if vals.iter().any(|v| v == value) {
+                    return true;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     }
 }
 

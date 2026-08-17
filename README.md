@@ -106,6 +106,16 @@ network just works. To send verification queries elsewhere instead, set
 `dns.resolver: 8.8.8.8` (signing then defaults off); `dns.sign_queries`
 overrides either behaviour explicitly.
 
+Whichever you choose, the "did my write land" check always asks the update
+server itself. A configured resolver is additionally polled as a courtesy
+before validation, and a resolver that hasn't caught up only prints a note —
+the CA resolves from its own servers, not yours.
+
+**Keep the challenge zone's SOA minimum low (60s).** That field sets how long
+resolvers cache "no such record", so a high value (86400 is a common default)
+can hide a freshly written TXT record from resolver-based checks for an hour
+or more.
+
 ## License
 
 Source-available, all rights reserved. You may read the code and run the
