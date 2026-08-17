@@ -1,6 +1,7 @@
 mod acme;
 mod config;
 mod dns;
+mod query;
 mod setup;
 
 use anyhow::{bail, Context, Result};

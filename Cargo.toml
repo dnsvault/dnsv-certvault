@@ -9,6 +9,8 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 clap = { version = "4.6.6", features = ["derive"] }
 dns-update = { version = "0.5.6", default-features = false }
+hickory-net = { version = "0.26.1", default-features = false }
+hickory-proto = { version = "0.26.1", default-features = false }
 instant-acme = { version = "0.8.5", default-features = false, features = ["rcgen", "hyper-rustls"] }
 rpassword = "7.5.4"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -22,8 +24,8 @@ x509-parser = "0.18.1"
 # `--no-default-features --features ring` is an escape hatch where aws-lc's C build
 # fails — note dns-update's ring feature switches reqwest to native-tls (OpenSSL).
 default = ["aws-lc-rs"]
-aws-lc-rs = ["instant-acme/aws-lc-rs", "dns-update/aws-lc-rs"]
-ring = ["instant-acme/ring", "dns-update/ring"]
+aws-lc-rs = ["instant-acme/aws-lc-rs", "dns-update/aws-lc-rs", "hickory-proto/dnssec-aws-lc-rs", "hickory-net/dnssec-aws-lc-rs"]
+ring = ["instant-acme/ring", "dns-update/ring", "hickory-proto/dnssec-ring", "hickory-net/dnssec-ring"]
 
 [profile.release]
 strip = true

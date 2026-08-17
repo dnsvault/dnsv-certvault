@@ -96,6 +96,16 @@ certbot certonly --manual --preferred-challenges dns \
 cargo build --release   # target/release/dnsvcert, single static-ish binary
 ```
 
+## Multi-view DNS (internal networks)
+
+DNSVault-style servers answer different views to different clients, routed
+by source address — or by TSIG key. dnsvcert signs its verification
+queries (TXT confirm, `doctor` checks) with your key by default, so they
+land in the same view as the signed updates and running from inside the
+network just works. To send verification queries elsewhere instead, set
+`dns.resolver: 8.8.8.8` (signing then defaults off); `dns.sign_queries`
+overrides either behaviour explicitly.
+
 ## License
 
 Source-available, all rights reserved. You may read the code and run the

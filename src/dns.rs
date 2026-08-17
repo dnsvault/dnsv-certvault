@@ -13,6 +13,7 @@ pub fn challenge_txt_name(identifier: &str, zone: &str) -> String {
 
 pub struct ChallengeDns {
     updater: DnsUpdater,
+    querier: crate::query::Querier,
     pub zone: String,
     ttl: u32,
     pub propagation_wait_secs: u64,
@@ -33,15 +34,34 @@ impl ChallengeDns {
             ),
             None => (vec![0u8; 32], false),
         };
+        let server_sock = resolve_addr(&cfg.server_addr())?;
         let updater = DnsUpdater::new_rfc2136_tsig(
-            resolve_server(&cfg.server_addr())?.as_str(),
+            format!("tcp://{server_sock}").as_str(),
             &cfg.tsig_key,
-            key,
+            key.clone(),
             parse_algorithm(&cfg.tsig_algorithm)?,
         )
         .map_err(|e| anyhow!("cannot create DNS updater: {e}"))?;
+
+        // Verification queries: same server by default, signed by default —
+        // multi-view servers route signed queries like the signed updates.
+        // A custom resolver flips the signing default off (a public resolver
+        // doesn't know the key).
+        let query_sock = match &cfg.resolver {
+            Some(r) => resolve_addr(&normalize_addr(r)),
+            None => Ok(server_sock),
+        }?;
+        let sign_queries = cfg.sign_queries.unwrap_or(cfg.resolver.is_none());
+        let query_key = if sign_queries && signed {
+            Some((cfg.tsig_key.as_str(), key, cfg.tsig_algorithm.as_str()))
+        } else {
+            None
+        };
+        let querier = crate::query::Querier::new(query_sock, query_key)?;
+
         Ok(Self {
             updater,
+            querier,
             zone: cfg.challenge_zone.clone(),
             ttl: cfg.ttl,
             propagation_wait_secs: cfg.propagation_wait_secs,
@@ -83,33 +103,40 @@ impl ChallengeDns {
             .map_err(|e| anyhow!("TSIG update failed clearing TXT {name}: {e}"))
     }
 
-    /// Query the configured master for the TXT values at `name`.
+    /// Query the verification path for the TXT values at `name`.
     pub async fn txt_values(&self, name: &str) -> Result<Vec<String>> {
+        use hickory_proto::rr::{RData, RecordType};
         let records = self
-            .updater
-            .list_rrset(name, DnsRecordType::TXT, self.zone.as_str())
+            .querier
+            .query(name, RecordType::TXT)
             .await
             .map_err(|e| anyhow!("TXT query for {name} failed: {e}"))?;
         Ok(records
             .into_iter()
             .filter_map(|r| match r {
-                DnsRecord::TXT(v) => Some(v),
+                RData::TXT(t) => Some(
+                    t.txt_data
+                        .iter()
+                        .map(|c| String::from_utf8_lossy(c).into_owned())
+                        .collect::<String>(),
+                ),
                 _ => None,
             })
             .collect())
     }
 
-    /// Query the configured master for a CNAME target, if any.
-    /// ponytail: doctor asks the master only — if the real zone lives on
-    /// other servers this reports "missing" even when the CNAME exists.
+    /// Query the verification path for a CNAME target, if any.
+    /// ponytail: this asks one server — if the real zone lives elsewhere and
+    /// that server won't recurse, set dns.resolver to something that will.
     pub async fn cname_target(&self, name: &str) -> Result<Option<String>> {
+        use hickory_proto::rr::{RData, RecordType};
         let records = self
-            .updater
-            .list_rrset(name, DnsRecordType::CNAME, self.zone.as_str())
+            .querier
+            .query(name, RecordType::CNAME)
             .await
             .map_err(|e| anyhow!("CNAME query for {name} failed: {e}"))?;
         Ok(records.into_iter().find_map(|r| match r {
-            DnsRecord::CNAME(target) => Some(target),
+            RData::CNAME(target) => Some(target.0.to_utf8()),
             _ => None,
         }))
     }
@@ -138,21 +165,37 @@ impl ChallengeDns {
     }
 }
 
-/// dns-update's address parser only takes IPs; people configure hostnames.
-/// Resolve "proto://host:port" to "proto://ip:port" when host isn't an IP.
-fn resolve_server(addr: &str) -> Result<String> {
-    let (proto, rest) = addr.split_once("://").unwrap_or(("tcp", addr));
+/// Bare "host" or "host:port" → "tcp://host:port" (the form server_addr emits).
+fn normalize_addr(raw: &str) -> String {
+    let s = raw.trim();
+    let with_proto = if s.contains("://") {
+        s.to_string()
+    } else {
+        format!("tcp://{s}")
+    };
+    let after = with_proto.splitn(2, "://").nth(1).unwrap_or("");
+    if after.contains(':') {
+        with_proto
+    } else {
+        format!("{with_proto}:53")
+    }
+}
+
+/// "proto://host:port" → SocketAddr, resolving hostnames (people configure
+/// names; dns-update's parser only takes IPs).
+fn resolve_addr(addr: &str) -> Result<std::net::SocketAddr> {
+    let rest = addr.splitn(2, "://").nth(1).unwrap_or(addr);
     let (host, port) = rest.rsplit_once(':').unwrap_or((rest, "53"));
-    if host.parse::<std::net::IpAddr>().is_ok() {
-        return Ok(format!("{proto}://{host}:{port}"));
+    let port: u16 = port.parse().with_context(|| format!("bad port in '{addr}'"))?;
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(std::net::SocketAddr::new(ip, port));
     }
     use std::net::ToSocketAddrs;
-    let sock = format!("{host}:{port}")
+    format!("{host}:{port}")
         .to_socket_addrs()
-        .with_context(|| format!("cannot resolve dns.server hostname '{host}'"))?
+        .with_context(|| format!("cannot resolve hostname '{host}'"))?
         .next()
-        .ok_or_else(|| anyhow!("dns.server '{host}' resolved to no addresses"))?;
-    Ok(format!("{proto}://{}:{}", sock.ip(), sock.port()))
+        .ok_or_else(|| anyhow!("'{host}' resolved to no addresses"))
 }
 
 fn parse_algorithm(s: &str) -> Result<TsigAlgorithm> {

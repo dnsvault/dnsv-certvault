@@ -42,6 +42,16 @@ pub struct DnsConfig {
     /// validate — covers NOTIFY lag to the challenge zone's secondaries.
     #[serde(default = "default_propagation_wait_secs")]
     pub propagation_wait_secs: u64,
+    /// Where verification queries (TXT confirm, doctor's CNAME checks) go.
+    /// Defaults to `server`. Point it elsewhere when the update server's view
+    /// routing would answer your queries from the wrong view.
+    #[serde(default)]
+    pub resolver: Option<String>,
+    /// Sign verification queries with the TSIG key so multi-view servers
+    /// route them like the updates. Default: true when `resolver` is unset,
+    /// false when a custom resolver is configured.
+    #[serde(default)]
+    pub sign_queries: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -149,6 +159,10 @@ dns:
   tsig_key: {key}
   # Base64 secret; alternatively set the DNSVCERT_TSIG_SECRET environment variable.
   tsig_secret: "{secret}"
+  # Multi-view servers: verification queries are TSIG-signed by default so
+  # they route like the updates. Uncomment to send them elsewhere instead:
+  # resolver: 8.8.8.8
+  # sign_queries: false
 
 renew_before_days: 30
 
@@ -198,6 +212,8 @@ certificates:
             tsig_algorithm: default_tsig_algorithm(),
             ttl: 60,
             propagation_wait_secs: 1,
+            resolver: None,
+            sign_queries: None,
         };
         assert_eq!(mk("udp://1.2.3.4:5353").server_addr(), "udp://1.2.3.4:5353");
         assert_eq!(mk("1.2.3.4:5353").server_addr(), "tcp://1.2.3.4:5353");

@@ -445,6 +445,8 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "dns-update",
+ "hickory-net",
+ "hickory-proto",
  "instant-acme",
  "rpassword",
  "serde",
