@@ -1,6 +1,7 @@
 mod acme;
 mod config;
 mod dns;
+mod setup;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,7 +13,8 @@ use dns::{challenge_txt_name, ChallengeDns};
 #[command(
     name = "dnsvcert",
     version,
-    about = "DNSVault ACME DNS-01 client — Let's Encrypt certificates through a delegated challenge zone"
+    about = "DNSVault ACME DNS-01 client — Let's Encrypt certificates through a delegated challenge zone",
+    after_help = "First time? Run `dnsvcert setup` for a guided, step-by-step walkthrough."
 )]
 struct Cli {
     /// Path to the YAML config file
@@ -24,6 +26,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Guided interactive setup: questions, live DNS checks, then issue
+    Setup,
     /// Write a starter config file, then print the DNS records to add
     Init(InitArgs),
     /// Issue (or re-issue) every certificate in the config
@@ -75,9 +79,12 @@ async fn main() -> Result<()> {
     if let Command::Init(args) = &cli.command {
         return run_init(&cli.config, args);
     }
+    if let Command::Setup = &cli.command {
+        return setup::run(&cli.config).await;
+    }
     let cfg = Config::load(&cli.config)?;
     match cli.command {
-        Command::Init(_) => unreachable!(),
+        Command::Init(_) | Command::Setup => unreachable!(),
         Command::Issue => run_certs(&cfg, false).await,
         Command::Renew => run_certs(&cfg, true).await,
         Command::Doctor => run_doctor(&cfg).await,
@@ -91,42 +98,16 @@ fn run_init(config_path: &str, args: &InitArgs) -> Result<()> {
         bail!("{config_path} already exists — edit it directly or pass a different -c path");
     }
     let or = |v: &Option<String>, ph: &str| v.clone().unwrap_or_else(|| ph.to_string());
-    let domains = if args.domains.is_empty() {
-        r#""app.example.com", "*.app.example.com""#.to_string()
-    } else {
-        args.domains
-            .iter()
-            .map(|d| format!("\"{d}\""))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let contents = format!(
-        r#"acme:
-  directory: https://acme-v02.api.letsencrypt.org/directory
-  email: {email}
-
-state_dir: /var/lib/dnsvcert
-
-dns:
-  # The three values below come with your DNSVault subscription.
-  server: {server}
-  challenge_zone: {zone}
-  tsig_key: {key}
-  # Base64 secret; alternatively set the DNSVCERT_TSIG_SECRET environment variable.
-  tsig_secret: "CHANGE_ME"
-
-renew_before_days: 30
-
-certificates:
-  - domains: [{domains}]
-    output_dir: {out}
-    # reload_hook: "systemctl reload nginx"
-"#,
-        email = or(&args.email, "you@example.com"),
-        server = or(&args.server, "ns1.example-dnsvault.net"),
-        zone = or(&args.challenge_zone, "acme.example.com"),
-        key = or(&args.tsig_key, "dnsvcert-key"),
-        out = or(&args.output_dir, "/etc/ssl/dnsvcert"),
+    let contents = config::render_template(
+        &or(&args.email, "you@example.com"),
+        &or(&args.server, "ns1.example-dnsvault.net"),
+        &or(&args.challenge_zone, "acme.example.com"),
+        &or(&args.tsig_key, "dnsvcert-key"),
+        None,
+        &args.domains,
+        &or(&args.output_dir, "/etc/ssl/dnsvcert"),
+        "/var/lib/dnsvcert",
+        None,
     );
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)
@@ -229,9 +210,7 @@ async fn run_doctor(cfg: &Config) -> Result<()> {
 
     // TSIG write probe inside the challenge zone
     if dns.can_write() {
-        let probe_name = format!("_dnsvcert-probe.{}", dns.zone);
-        let probe_value = format!("dnsvcert-probe-{}", std::process::id());
-        match probe_tsig(&dns, &probe_name, &probe_value).await {
+        match dns.probe().await {
             Ok(()) => println!("PASS  TSIG write access to {}", dns.zone),
             Err(e) => {
                 println!("FAIL  TSIG write access to {}: {e:#}", dns.zone);
@@ -278,13 +257,6 @@ async fn run_doctor(cfg: &Config) -> Result<()> {
     }
     println!("all checks passed");
     Ok(())
-}
-
-async fn probe_tsig(dns: &ChallengeDns, name: &str, value: &str) -> Result<()> {
-    dns.add_txt(name, value).await?;
-    let result = dns.confirm_txt(name, value).await;
-    dns.clear_txt(name).await?;
-    result
 }
 
 async fn run_hook(cfg: &Config, action: HookAction) -> Result<()> {

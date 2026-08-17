@@ -56,6 +56,15 @@ on your PATH. No runtime, no dependencies.
 
 ## Client usage
 
+New to this? The guided walkthrough asks for everything, live-checks your
+DNS with fix-and-retry loops, and issues when everything passes:
+
+```
+dnsvcert setup
+```
+
+Prefer flags? The non-interactive path:
+
 ```
 dnsvcert init --domain app.example.com --domain '*.app.example.com' \
   --email ops@example.com --challenge-zone acme.example.com   # writes starter config

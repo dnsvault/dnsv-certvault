@@ -109,6 +109,57 @@ impl DnsConfig {
     }
 }
 
+/// Render a config file. Used by `init` (placeholders) and `setup` (real values).
+#[allow(clippy::too_many_arguments)]
+pub fn render_template(
+    email: &str,
+    server: &str,
+    zone: &str,
+    key: &str,
+    secret: Option<&str>,
+    domains: &[String],
+    output_dir: &str,
+    state_dir: &str,
+    reload_hook: Option<&str>,
+) -> String {
+    let domains_line = if domains.is_empty() {
+        r#""app.example.com", "*.app.example.com""#.to_string()
+    } else {
+        domains
+            .iter()
+            .map(|d| format!("\"{d}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let hook_line = match reload_hook {
+        Some(h) if !h.is_empty() => format!("    reload_hook: \"{h}\"\n"),
+        _ => "    # reload_hook: \"systemctl reload nginx\"\n".to_string(),
+    };
+    format!(
+        r#"acme:
+  directory: https://acme-v02.api.letsencrypt.org/directory
+  email: {email}
+
+state_dir: {state_dir}
+
+dns:
+  # The three values below come with your DNSVault subscription.
+  server: {server}
+  challenge_zone: {zone}
+  tsig_key: {key}
+  # Base64 secret; alternatively set the DNSVCERT_TSIG_SECRET environment variable.
+  tsig_secret: "{secret}"
+
+renew_before_days: 30
+
+certificates:
+  - domains: [{domains_line}]
+    output_dir: {output_dir}
+{hook_line}"#,
+        secret = secret.unwrap_or("CHANGE_ME"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

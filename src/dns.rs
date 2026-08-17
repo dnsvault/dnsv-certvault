@@ -114,6 +114,17 @@ impl ChallengeDns {
         }))
     }
 
+    /// Write a probe TXT record, confirm it, and clean it up — proves the
+    /// TSIG key + server + zone combination end to end.
+    pub async fn probe(&self) -> Result<()> {
+        let name = format!("_dnsvcert-probe.{}", self.zone);
+        let value = format!("dnsvcert-probe-{}", std::process::id());
+        self.add_txt(&name, &value).await?;
+        let result = self.confirm_txt(&name, &value).await;
+        self.clear_txt(&name).await?;
+        result
+    }
+
     /// Confirm the master serves `value` in TXT at `name` (update is applied
     /// synchronously by BIND; a few retries cover slow paths).
     pub async fn confirm_txt(&self, name: &str, value: &str) -> Result<()> {
